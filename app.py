@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 from io import BytesIO
+import zipfile
 
 # Configure the Streamlit app's appearance and layout
 st.set_page_config(page_title="Data Sweeper", layout="wide")
@@ -89,10 +90,13 @@ st.markdown(
 
 # Display the main app title and introductory text
 st.title("Advanced Data Sweeper")  # Large, eye-catching title
-st.write("Transform your files between CSV and Excel formats with built-in data cleaning and visualization.")
+st.write("Transform your files between CSV and Excel formats with built-in data cleaning, filtering, and visualization.")
 
 # File uploader widget that accepts CSV and Excel files
 uploaded_files = st.file_uploader("Upload your files (CSV or Excel):", type=["csv", "xlsx"], accept_multiple_files=True)
+
+# Initialize a list to store processed files for ZIP export
+processed_files = []
 
 # Processing logic for uploaded files (if any files are uploaded)
 if uploaded_files:
@@ -101,13 +105,16 @@ if uploaded_files:
         file_extension = os.path.splitext(file.name)[-1].lower()
         
         # Read the uploaded file into a pandas DataFrame based on its extension
-        if file_extension == ".csv":
-            df = pd.read_csv(file)  # Read CSV files
-        elif file_extension == ".xlsx":
-            df = pd.read_excel(file)  # Read Excel files
-        else:
-            # Show an error message if the file type is unsupported
-            st.error(f"Unsupported file type: {file_extension}")
+        try:
+            if file_extension == ".csv":
+                df = pd.read_csv(file)  # Read CSV files
+            elif file_extension == ".xlsx":
+                df = pd.read_excel(file)  # Read Excel files
+            else:
+                st.error(f"Unsupported file type: {file_extension}")
+                continue
+        except Exception as e:
+            st.error(f"Error reading {file.name}: {e}")
             continue
         
         # Display uploaded file information (name and size)
@@ -141,16 +148,52 @@ if uploaded_files:
                     df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].mean())
                     st.write("Missing Values in Numeric Columns Filled with Column Means!")
 
-        # Section to choose specific columns to convert
-        st.subheader("🎯 Select Columns to Convert")
-        columns = st.multiselect(f"Choose Columns for {file.name}", df.columns, default=df.columns)
-        df = df[columns]  # Filters the DataFrame to the selected columns
-        
+        # New Feature: Data Filtering
+        st.subheader("🔍 Data Filtering")
+        filter_condition = st.text_input(f"Enter a condition to filter rows (e.g., `column_name > 50` for {file.name}):")
+        if filter_condition:
+            try:
+                df = df.query(filter_condition)
+                st.write(f"Filtered Data for {file.name}:")
+                st.dataframe(df)
+            except Exception as e:
+                st.error(f"Invalid filter condition: {e}")
+
+        # New Feature: Column Renaming
+        st.subheader("✏️ Column Renaming")
+        rename_dict = {}
+        for col in df.columns:
+            new_name = st.text_input(f"Rename '{col}' to:", key=f"rename_{col}_{file.name}")
+            if new_name:
+                rename_dict[col] = new_name
+        if rename_dict:
+            df.rename(columns=rename_dict, inplace=True)
+            st.write("Updated Column Names:")
+            st.write(df.columns)
+
+        # New Feature: Data Summary Statistics
+        st.subheader("📊 Summary Statistics")
+        if st.checkbox(f"Show Summary Statistics for {file.name}"):
+            st.write(df.describe())
+
         # Visualization section for uploaded data
         st.subheader("📊 Data Visualization")
         if st.checkbox(f"Show Visualization for {file.name}"):
-            st.bar_chart(df.select_dtypes(include='number').iloc[:, :2])  # Plot the first two numeric columns as a bar chart
-        
+            chart_type = st.selectbox(f"Select Chart Type for {file.name}", ["Bar Chart", "Line Chart", "Scatter Plot"])
+            numeric_cols = df.select_dtypes(include='number').columns
+            if len(numeric_cols) >= 2:
+                if chart_type == "Bar Chart":
+                    st.bar_chart(df[numeric_cols].iloc[:, :2])
+                elif chart_type == "Line Chart":
+                    st.line_chart(df[numeric_cols].iloc[:, :2])
+                elif chart_type == "Scatter Plot":
+                    st.write("Select two numeric columns for the scatter plot:")
+                    x_axis = st.selectbox("X-axis", numeric_cols, key=f"x_axis_{file.name}")
+                    y_axis = st.selectbox("Y-axis", numeric_cols, key=f"y_axis_{file.name}")
+                    st.scatter_chart(df[[x_axis, y_axis]])
+            else:
+                st.warning("Not enough numeric columns for visualization.")
+
         # Section to choose file conversion type (CSV or Excel)
         st.subheader("🔄 Conversion Options")
         conversion_type = st.radio(f"Convert {file.name} to:", ["CSV", "Excel"], key=file.name)
@@ -172,6 +215,23 @@ if uploaded_files:
                 data=buffer,
                 file_name=file_name,
                 mime=mime_type
+            )
+            processed_files.append((file_name, buffer))
+
+    # New Feature: Export All Files as ZIP
+    if processed_files:
+        st.subheader("📦 Export All Files")
+        if st.button("Export All Files as ZIP"):
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
+                for file_name, buffer in processed_files:
+                    zip_file.writestr(file_name, buffer.getvalue())
+            zip_buffer.seek(0)
+            st.download_button(
+                label="⬇️ Download All Files as ZIP",
+                data=zip_buffer,
+                file_name="processed_files.zip",
+                mime="application/zip"
             )
 
 st.success("🎉 All files processed successfully!")
